@@ -1,7 +1,8 @@
 import os
 from crewai import Agent, Crew, Process, Task, LLM
 from crewai.project import CrewBase, agent, crew, task
-from crewai_tools import FileWriterTool
+from crewai_tools import FileWriterTool, FileReadTool, DirectoryReadTool
+from src.state_manager import StateManager
 
 @CrewBase
 class EmpresaSoftwareCrew:
@@ -10,9 +11,10 @@ class EmpresaSoftwareCrew:
     tasks_config = 'config/tasks.yaml'
 
     def __init__(self):
-        self.llm = self.configurar_llm()
+        self.worker_llm = self.configurar_worker_llm()
+        self.state_manager = StateManager()
 
-    def configurar_llm(self):
+    def configurar_worker_llm(self):
         api_key = os.getenv("DEEPSEEK_API_KEY")
         if not api_key:
             raise ValueError("DEEPSEEK_API_KEY is not set in environment variables.")
@@ -30,7 +32,17 @@ class EmpresaSoftwareCrew:
             config=self.agents_config['backend_agent'],
             tools=[FileWriterTool()],
             verbose=True,
-            llm=self.llm,
+            llm=self.worker_llm,
+            allow_delegation=False
+        )
+
+    @agent
+    def review_agent(self) -> Agent:
+        return Agent(
+            config=self.agents_config['review_agent'],
+            tools=[FileWriterTool(), FileReadTool(), DirectoryReadTool(directory='./output')],
+            verbose=True,
+            llm=self.worker_llm,
             allow_delegation=False
         )
 
@@ -38,9 +50,19 @@ class EmpresaSoftwareCrew:
     def devops_agent(self) -> Agent:
         return Agent(
             config=self.agents_config['devops_agent'],
-            tools=[FileWriterTool()],
+            tools=[FileWriterTool(), FileReadTool(), DirectoryReadTool(directory='./output')],
             verbose=True,
-            llm=self.llm,
+            llm=self.worker_llm,
+            allow_delegation=False
+        )
+
+    @agent
+    def qa_agent(self) -> Agent:
+        return Agent(
+            config=self.agents_config['qa_agent'],
+            tools=[FileWriterTool(), FileReadTool(), DirectoryReadTool(directory='./output')],
+            verbose=True,
+            llm=self.worker_llm,
             allow_delegation=False
         )
 
@@ -48,7 +70,17 @@ class EmpresaSoftwareCrew:
     def coding_task(self) -> Task:
         return Task(
             config=self.tasks_config['coding_task'],
-            agent=self.backend_agent()
+            agent=self.backend_agent(),
+            callback=self.task_callback
+        )
+
+    @task
+    def validation_task(self) -> Task:
+        return Task(
+            config=self.tasks_config['validation_task'],
+            agent=self.review_agent(),
+            context=[self.coding_task()],
+            callback=self.task_callback
         )
 
     @task
@@ -56,15 +88,52 @@ class EmpresaSoftwareCrew:
         return Task(
             config=self.tasks_config['infrastructure_task'],
             agent=self.devops_agent(),
-            context=[self.coding_task()]
+            context=[self.coding_task()],
+            callback=self.task_callback
+        )
+
+    @task
+    def testing_task(self) -> Task:
+        return Task(
+            config=self.tasks_config['testing_task'],
+            agent=self.qa_agent(),
+            context=[self.coding_task()],
+            callback=self.task_callback
+        )
+
+    def task_callback(self, task_output):
+        """Callback to log task completion to SQLite."""
+        try:
+            # Depending on crewai version, task_output might be a string or object.
+            # We treat it safely.
+            result_summary = str(task_output)[:200]
+            # Since we don't have task name easily in callback signature in some versions,
+            # we rely on the context or generic logging.
+            # Ideally, we'd pass task name, but standard callback signature is (task_output).
+            self.state_manager.log_task(
+                task_name="Unknown Task (Callback)",
+                status="SUCCESS",
+                details=result_summary
+            )
+        except Exception as e:
+            print(f"Error logging task: {e}")
+
+    @crew
+    def initial_crew(self) -> Crew:
+        """Crew for coding and validation"""
+        return Crew(
+            agents=[self.backend_agent(), self.review_agent()],
+            tasks=[self.coding_task(), self.validation_task()],
+            process=Process.sequential,
+            verbose=True
         )
 
     @crew
-    def crew(self) -> Crew:
-        """Creates the EmpresaSoftwareCrew crew"""
+    def final_crew(self) -> Crew:
+        """Crew for infrastructure and testing"""
         return Crew(
-            agents=self.agents, # Automatically collected by the @agent decorator
-            tasks=self.tasks,   # Automatically collected by the @task decorator
+            agents=[self.devops_agent(), self.qa_agent()],
+            tasks=[self.infrastructure_task(), self.testing_task()],
             process=Process.sequential,
-            verbose=True,
+            verbose=True
         )

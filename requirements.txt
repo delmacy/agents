@@ -4,3 +4,9 @@ python-dotenv>=1.0.0
 langchain-openai>=0.1.0
 litellm
 openai==1.83.0
+pytest
+httpx
+apscheduler
+fastapi
+email-validator
+pydantic[email]
