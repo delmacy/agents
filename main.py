@@ -5,6 +5,7 @@ import json
 import uuid
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -15,6 +16,14 @@ from src.state_manager import StateManager
 load_dotenv()
 
 app = FastAPI(title="Empresa de Agentes Factory Server (Full-Chain)")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins for local dev
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- Models ---
 class PlanStartRequest(BaseModel):

@@ -13,3 +13,6 @@ pydantic[email]
 fastapi
 uvicorn
 python-multipart
+streamlit
+requests
+watchdog
