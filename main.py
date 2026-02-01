@@ -3,7 +3,7 @@ import sys
 import time
 import json
 import uuid
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -14,15 +14,26 @@ from src.state_manager import StateManager
 # Load environment variables
 load_dotenv()
 
-app = FastAPI(title="Empresa de Agentes Factory Server")
+app = FastAPI(title="Empresa de Agentes Factory Server (Full-Chain)")
 
-class GenerateRequest(BaseModel):
-    topic: str
-    requirements: str
+# --- Models ---
+class PlanStartRequest(BaseModel):
+    initial_requirements: Optional[str] = None
 
-class GenerateResponse(BaseModel):
+class PlanStartResponse(BaseModel):
     job_id: str
     status: str
+    message: str
+
+class ChatRequest(BaseModel):
+    message: str
+
+class ChatResponse(BaseModel):
+    response: str
+    history: List[Dict[str, str]]
+
+class ApproveRequest(BaseModel):
+    feedback: Optional[str] = None
 
 class TaskLog(BaseModel):
     task_name: str
@@ -36,102 +47,192 @@ class StatusResponse(BaseModel):
     status: str
     tasks: List[TaskLog]
 
-def executar_fluxo(inputs: dict, job_id: str):
+# --- Workflow Logic ---
+
+def execute_multistage_build(job_id: str):
     """
-    Executes the crew with retry logic and validation loop in background.
+    Executes Phase 2 to 5 (Leadership -> Build -> Sandbox -> QA)
     """
     state_manager = StateManager()
     output_dir = f"output/{job_id}"
 
-    # Ensure output directory exists
+    # Ensure output directory exists (should exist from Discovery, but safety check)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
     max_retries = 3
     version = 1
+    feedback = ""
 
-    state_manager.log_task(job_id, "Workflow", "STARTED", version, "Job started")
+    state_manager.log_task(job_id, "Workflow", "STARTED_BUILD", version, "Build phases started")
 
     while version <= max_retries:
-        print(f"\n>>> [Job {job_id}] Starting Phase 1: Development & Validation (Version {version})")
+        print(f"\n>>> [Job {job_id}] Starting Build Cycle (Version {version})")
 
-        # Step 1: Run Coding & Validation
+        software_crew = EmpresaSoftwareCrew(job_id=job_id)
+
+        # Phase 2: Design (Leadership)
         try:
-            # Instantiate crew with job_id context
-            software_crew = EmpresaSoftwareCrew(job_id=job_id)
-            initial_crew = software_crew.initial_crew()
-
-            # Kickoff Phase 1
-            result = initial_crew.kickoff(inputs=inputs)
-            state_manager.log_task(job_id, "Phase 1 Crew", "COMPLETED", version, "Initial coding and validation run")
-
+            print(f">>> [Job {job_id}] Phase 2: Leadership/Design")
+            leadership_crew = software_crew.leadership_crew()
+            # Input is the final_plan.json. CrewAI needs inputs dict.
+            # We assume the agents read final_plan.json from disk using tools.
+            # But we pass a dummy input to trigger.
+            leadership_crew.kickoff(inputs={'stage': 'design', 'job_id': job_id})
+            state_manager.log_task(job_id, "Phase 2 (Design)", "COMPLETED", version, "Blueprint generated")
         except Exception as e:
-            print(f"Error during Phase 1 execution: {e}")
-            state_manager.log_task(job_id, "Phase 1 Crew", "FAILED", version, str(e))
-            state_manager.log_task(job_id, "Workflow", "FAILED", version, f"Critical error: {str(e)}")
-            return # Stop execution on critical error
+            print(f"Error Phase 2: {e}")
+            state_manager.log_task(job_id, "Phase 2 (Design)", "FAILED", version, str(e))
+            state_manager.log_task(job_id, "Workflow", "FAILED", version, "Phase 2 failed")
+            return
 
-        # Step 2: Check Validation Report
+        # Phase 3: Build & Validation (Development)
+        try:
+            print(f">>> [Job {job_id}] Phase 3: Development (Feedback: {feedback})")
+            development_crew = software_crew.development_crew()
+            # Pass feedback to the inputs so the LLM context receives it
+            development_crew.kickoff(inputs={
+                'stage': 'development',
+                'job_id': job_id,
+                'feedback': feedback if version > 1 else 'None'
+            })
+            state_manager.log_task(job_id, "Phase 3 (Build)", "COMPLETED", version, "Code implemented")
+        except Exception as e:
+            print(f"Error Phase 3: {e}")
+            state_manager.log_task(job_id, "Phase 3 (Build)", "FAILED", version, str(e))
+            state_manager.log_task(job_id, "Workflow", "FAILED", version, "Phase 3 failed")
+            return
+
+        # Check Validation Report
         report_path = os.path.join(output_dir, 'validation_report.json')
-        missing = []
         is_valid = False
-        feedback = ""
+        # Don't reset feedback here, we accumulate or replace it for next loop if fail
+        current_feedback = ""
+        missing = []
 
-        if not os.path.exists(report_path):
-            print("Validation report not found. Assuming failure.")
-            is_valid = False
-            feedback = "Validation report missing."
-        else:
+        if os.path.exists(report_path):
             try:
                 with open(report_path, 'r') as f:
                     report = json.load(f)
                     is_valid = report.get('is_valid', False)
-                    feedback = report.get('feedback', '')
+                    current_feedback = report.get('feedback', '')
                     missing = report.get('missing_features', [])
-                    print(f"\n>>> [Job {job_id}] Validation Result: {'PASS' if is_valid else 'FAIL'}")
-            except json.JSONDecodeError:
-                print("Error reading validation report. Assuming failure.")
-                is_valid = False
-                feedback = "Validation report corrupted."
-
-        # Step 3: Fork Logic
-        if is_valid:
-            print(f"\n>>> [Job {job_id}] Validation Passed. Proceeding to Phase 2: Infrastructure & QA")
-            try:
-                final_crew = software_crew.final_crew()
-                # Run Phase 2
-                final_result = final_crew.kickoff(inputs=inputs)
-                state_manager.log_task(job_id, "Phase 2 Crew", "SUCCESS", version, "Infra and QA generated")
-                state_manager.log_task(job_id, "Workflow", "SUCCESS", version, "Project Completed Successfully")
-                return
-
-            except Exception as e:
-                 print(f"Error during Phase 2 execution: {e}")
-                 state_manager.log_task(job_id, "Phase 2 Crew", "FAILED", version, str(e))
-                 state_manager.log_task(job_id, "Workflow", "FAILED", version, f"Phase 2 error: {str(e)}")
-                 return
+            except:
+                current_feedback = "Corrupted validation report"
         else:
-            # Loop Back
-            print(f"\n>>> [Job {job_id}] Validation Failed. Looping back for rework (Attempt {version}/{max_retries})")
-            inputs['feedback'] = f"Previous attempt failed validation. Feedback: {feedback}. Missing: {missing}. Please fix these issues."
-            version += 1
-            state_manager.log_task(job_id, "Validation Gate", "RETRY_TRIGGERED", version, feedback)
-            time.sleep(2)
+            current_feedback = "Missing validation report"
 
-    print(f"[Job {job_id}] Max retries reached. Validation failed.")
+        if not is_valid:
+            print(f">>> [Job {job_id}] Validation Failed. Looping.")
+            feedback = f"Previous attempt failed. Feedback: {current_feedback}. Missing: {missing}."
+            state_manager.log_task(job_id, "Validation Gate", "RETRY_TRIGGERED", version, feedback)
+            version += 1
+            continue # Retry loop
+
+        # Phase 4: Sandbox & QA (Execution)
+        print(f">>> [Job {job_id}] Phase 4: Sandbox & QA")
+        try:
+            execution_crew = software_crew.execution_crew()
+            execution_crew.kickoff(inputs={'stage': 'execution', 'job_id': job_id})
+            state_manager.log_task(job_id, "Phase 4 (QA)", "COMPLETED", version, "Sandbox tests ran")
+        except Exception as e:
+             print(f"Error Phase 4: {e}")
+             state_manager.log_task(job_id, "Phase 4 (QA)", "FAILED", version, str(e))
+             state_manager.log_task(job_id, "Workflow", "FAILED", version, "Phase 4 failed")
+             return
+
+        # Final Success
+        print(f">>> [Job {job_id}] Workflow Complete")
+        state_manager.log_task(job_id, "Workflow", "SUCCESS", version, "Delivery Ready")
+        return
+
     state_manager.log_task(job_id, "Workflow", "FAILED", version, "Max retries reached")
 
-@app.post("/generate", response_model=GenerateResponse)
-async def generate_project(request: GenerateRequest, background_tasks: BackgroundTasks):
+
+# --- Endpoints ---
+
+@app.post("/plan/start", response_model=PlanStartResponse)
+async def start_planning(request: PlanStartRequest):
     job_id = str(uuid.uuid4())
+    output_dir = f"output/{job_id}"
+    os.makedirs(output_dir, exist_ok=True)
+
+    state_manager = StateManager()
+    state_manager.log_task(job_id, "Phase 1 (Discovery)", "STARTED", 1, "Planning session initialized")
+
+    # If initial requirements provided, save them (maybe as a pseudo-chat or just file)
+    if request.initial_requirements:
+        with open(f"{output_dir}/initial_requirements.txt", "w") as f:
+            f.write(request.initial_requirements)
+        state_manager.save_chat_message(job_id, "user", request.initial_requirements)
+
+    return PlanStartResponse(job_id=job_id, status="planning", message="Job started. Use /plan/chat/{job_id} to refine requirements.")
+
+@app.post("/plan/chat/{job_id}", response_model=ChatResponse)
+async def chat_planning(job_id: str, request: ChatRequest):
+    output_dir = f"output/{job_id}"
+    if not os.path.exists(output_dir):
+        raise HTTPException(status_code=404, detail="Job ID not found")
+
+    state_manager = StateManager()
+    state_manager.save_chat_message(job_id, "user", request.message)
+
+    # Here we invoke the Product Manager Agent to reply
+    # We use a specialized single-turn run or just the LLM directly?
+    # Using the Crew/Agent allows us to use tools (read files).
+
+    software_crew = EmpresaSoftwareCrew(job_id=job_id)
+    # PM Agent needs to see history.
+    history = state_manager.get_chat_history(job_id)
+    history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in history])
+
+    # We construct a task input for the PM
     inputs = {
-        'topic': request.topic,
-        'requirements': request.requirements
+        "conversation_history": history_str,
+        "current_message": request.message
     }
 
-    background_tasks.add_task(executar_fluxo, inputs, job_id)
+    # Run Discovery Crew (Single Turn)
+    # The agent's goal is to "Engage in conversation...".
+    # We might need to adjust the Task description dynamically to say "Reply to user".
+    # But for now, let's assume the agent uses the context to reply and maybe update final_plan.json.
 
-    return GenerateResponse(job_id=job_id, status="started")
+    try:
+        discovery_crew = software_crew.discovery_crew()
+        result = discovery_crew.kickoff(inputs=inputs)
+        # Result is the agent's output.
+        response_text = str(result)
+        state_manager.save_chat_message(job_id, "assistant", response_text)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    updated_history = state_manager.get_chat_history(job_id)
+    # Convert sqlite rows to list of dicts for response
+    history_list = [{"role": row['role'], "content": row['content']} for row in updated_history]
+
+    return ChatResponse(response=response_text, history=history_list)
+
+@app.post("/plan/approve/{job_id}")
+async def approve_plan(job_id: str, request: ApproveRequest, background_tasks: BackgroundTasks):
+    output_dir = f"output/{job_id}"
+    if not os.path.exists(output_dir):
+        raise HTTPException(status_code=404, detail="Job ID not found")
+
+    state_manager = StateManager()
+
+    # If fast path requirements provided in feedback
+    if request.feedback:
+        # Treat as final requirements
+        with open(f"{output_dir}/final_plan.json", "w") as f:
+            json.dump({"requirements": request.feedback, "approved": True}, f)
+        state_manager.save_chat_message(job_id, "user", f"APPROVED with feedback: {request.feedback}")
+    else:
+        state_manager.save_chat_message(job_id, "user", "APPROVED")
+
+    # Trigger Background Execution
+    background_tasks.add_task(execute_multistage_build, job_id)
+
+    return {"status": "build_started", "message": "Plan approved. Build pipeline initiated."}
 
 @app.get("/status/{job_id}", response_model=StatusResponse)
 async def get_status(job_id: str):
@@ -139,21 +240,15 @@ async def get_status(job_id: str):
     logs = state_manager.get_job_status(job_id)
 
     if not logs:
-        # If no logs found, check if directory exists (maybe just started and not logged yet?)
         if not os.path.exists(f"output/{job_id}"):
              raise HTTPException(status_code=404, detail="Job ID not found")
-        current_status = "PENDING"
+        current_status = "PLANNING"
     else:
-        # Determine overall status based on latest logs
         latest_log = logs[0]
         if latest_log['task_name'] == "Workflow":
              current_status = latest_log['status']
         else:
              current_status = "IN_PROGRESS"
-
-    # Convert logs to Pydantic models (sqlite rows need dict access)
-    # The get_job_status method already returns list of dicts if using sqlite3.Row or dict conversion in manager
-    # Our implementation in state_manager.py converts to dicts.
 
     task_logs = []
     for log in logs:

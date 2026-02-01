@@ -20,6 +20,8 @@ class StateManager:
         """Initialize the SQLite database and create the table if it doesn't exist."""
         conn = sqlite3.connect(self.DB_NAME)
         cursor = conn.cursor()
+
+        # Task Log Table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS task_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,7 +33,19 @@ class StateManager:
                 details TEXT
             )
         ''')
-        # Check if job_id column exists, if not add it (migration for existing DB)
+
+        # Chat History Table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS chat_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # Check columns for task_log (migration)
         cursor.execute("PRAGMA table_info(task_log)")
         columns = [column[1] for column in cursor.fetchall()]
         if 'job_id' not in columns:
@@ -55,12 +69,37 @@ class StateManager:
     def get_job_status(self, job_id: str):
         """Get all logs for a specific job."""
         conn = sqlite3.connect(self.DB_NAME)
-        conn.row_factory = sqlite3.Row  # Return rows as dictionaries
+        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute('''
             SELECT task_name, status, version, timestamp, details FROM task_log
             WHERE job_id = ?
             ORDER BY timestamp DESC
+        ''', (job_id,))
+        rows = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return rows
+
+    def save_chat_message(self, job_id: str, role: str, content: str):
+        """Save a chat message to the history."""
+        conn = sqlite3.connect(self.DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO chat_history (job_id, role, content, timestamp)
+            VALUES (?, ?, ?, ?)
+        ''', (job_id, role, content, datetime.now()))
+        conn.commit()
+        conn.close()
+
+    def get_chat_history(self, job_id: str):
+        """Get chat history for a job."""
+        conn = sqlite3.connect(self.DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT role, content, timestamp FROM chat_history
+            WHERE job_id = ?
+            ORDER BY id ASC
         ''', (job_id,))
         rows = [dict(row) for row in cursor.fetchall()]
         conn.close()
