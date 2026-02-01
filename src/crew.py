@@ -86,7 +86,7 @@ class EmpresaSoftwareCrew:
     def review_agent(self) -> Agent:
         return Agent(
             config=self.agents_config['review_agent'],
-            tools=[self.file_writer, self.file_reader, self.dir_reader],
+            tools=[self.file_writer, self.file_reader, self.dir_reader, self.venv_tool],
             verbose=True,
             llm=self.worker_llm(),
             allow_delegation=False

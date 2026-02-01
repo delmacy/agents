@@ -43,6 +43,16 @@ validation_task:
     Analyze the files generated in the 'output/' directory.
     Check if the files match the structure defined in 'blueprint.json'.
     Verify if main.py, models.py, schemas.py, requirements.txt exist and are valid.
+
+    MANDATORY SMOKE TEST: Before generating the report, you MUST attempt to load the application to catch ImportErrors or Pydantic configuration errors.
+    1. Use venv_execution_tool to install dependencies: pip install -r requirements.txt.
+    2. Use venv_execution_tool to run a strict import check: python -c 'import sys; sys.path.append("."); from app.api.v1.api import api_router; print("Import OK")' (Adjust the import path based on the generated structure).
+
+    CRITICAL: If the command returns ANY error in stderr (Traceback, PydanticUserError, etc.):
+    - Set is_valid: false.
+    - Copy the EXACT traceback into feedback.
+    - List the specific error in missing_features (e.g., 'Runtime Crash: Pydantic Configuration Error').
+
     Create a 'validation_report.json' file in 'output/' containing:
     {{
       "is_valid": boolean,
