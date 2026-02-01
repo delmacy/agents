@@ -15,6 +15,20 @@ from src.state_manager import StateManager
 # Load environment variables
 load_dotenv()
 
+class DualLogger:
+    def __init__(self, filepath):
+        self.terminal = sys.stdout
+        self.log = open(filepath, "a", encoding="utf-8")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.flush()
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+
 app = FastAPI(title="Empresa de Agentes Factory Server (Full-Chain)")
 
 app.add_middleware(
@@ -69,6 +83,9 @@ def execute_multistage_build(job_id: str):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
+    log_file = os.path.join(output_dir, "full_execution.log")
+    sys.stdout = DualLogger(log_file)
+
     max_retries = 3
     version = 1
     feedback = ""
@@ -89,9 +106,10 @@ def execute_multistage_build(job_id: str):
             state_manager.log_task(job_id, "Phase 2 (Design)", "COMPLETED", version, "Blueprint generated")
         except Exception as e:
             print(f"Error Phase 2: {e}")
-            state_manager.log_task(job_id, "Phase 2 (Design)", "FAILED", version, str(e))
-            state_manager.log_task(job_id, "Workflow", "FAILED", version, "Phase 2 failed")
-            return
+            state_manager.log_task(job_id, "Phase 2 (Design)", "CRASHED", version, str(e))
+            feedback = f"System Crashed in Phase 2 with error: {str(e)}. Retrying..."
+            version += 1
+            continue
 
         # Phase 3: Build & Validation (Development)
         try:
@@ -105,9 +123,10 @@ def execute_multistage_build(job_id: str):
             state_manager.log_task(job_id, "Phase 3 (Build)", "COMPLETED", version, "Code implemented")
         except Exception as e:
             print(f"Error Phase 3: {e}")
-            state_manager.log_task(job_id, "Phase 3 (Build)", "FAILED", version, str(e))
-            state_manager.log_task(job_id, "Workflow", "FAILED", version, "Phase 3 failed")
-            return
+            state_manager.log_task(job_id, "Phase 3 (Build)", "CRASHED", version, str(e))
+            feedback = f"System Crashed in Phase 3 with error: {str(e)}. Retrying..."
+            version += 1
+            continue
 
         # Check Validation Report
         report_path = os.path.join(output_dir, 'validation_report.json')
@@ -142,9 +161,10 @@ def execute_multistage_build(job_id: str):
             state_manager.log_task(job_id, "Phase 4 (QA)", "COMPLETED", version, "Sandbox tests ran")
         except Exception as e:
              print(f"Error Phase 4: {e}")
-             state_manager.log_task(job_id, "Phase 4 (QA)", "FAILED", version, str(e))
-             state_manager.log_task(job_id, "Workflow", "FAILED", version, "Phase 4 failed")
-             return
+             state_manager.log_task(job_id, "Phase 4 (QA)", "CRASHED", version, str(e))
+             feedback = f"System Crashed in Phase 4 with error: {str(e)}. Retrying..."
+             version += 1
+             continue
 
         # Phase 5: Technical Audit (Tech Lead)
         print(f">>> [Job {job_id}] Phase 5: Audit")
@@ -177,9 +197,10 @@ def execute_multistage_build(job_id: str):
 
         except Exception as e:
              print(f"Error Phase 5: {e}")
-             state_manager.log_task(job_id, "Phase 5 (Audit)", "FAILED", version, str(e))
-             state_manager.log_task(job_id, "Workflow", "FAILED", version, "Phase 5 failed")
-             return
+             state_manager.log_task(job_id, "Phase 5 (Audit)", "CRASHED", version, str(e))
+             feedback = f"System Crashed in Phase 5 with error: {str(e)}. Retrying..."
+             version += 1
+             continue
 
         # Final Success
         print(f">>> [Job {job_id}] Workflow Complete")

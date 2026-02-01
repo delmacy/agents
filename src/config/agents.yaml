@@ -69,6 +69,8 @@ backend_agent:
     2. NEVER name a field the same as its type (e.g., avoid `date: date`; use `date: DateType`).
     3. Use `model_config = ConfigDict(...)` instead of `class Config:`.
 
+    Focus on efficient code generation. Avoid extremely long reasoning chains for simple file writes.
+
 review_agent:
   role: >
     Technical Project Manager / Auditor
