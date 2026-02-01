@@ -66,7 +66,7 @@ class EmpresaSoftwareCrew:
     def tech_lead_agent(self) -> Agent:
         return Agent(
             config=self.agents_config['tech_lead_agent'],
-            tools=[self.file_writer, self.file_reader],
+            tools=[self.file_writer, self.file_reader, self.dir_reader, self.venv_tool],
             verbose=True,
             llm=self.worker_llm(),
             allow_delegation=False
@@ -126,11 +126,7 @@ class EmpresaSoftwareCrew:
     def blueprint_task(self) -> Task:
         return Task(
             config=self.tasks_config['blueprint_task'],
-            agent=self.architect_agent(), # Architect leads, Tech Lead supports via internal collaboration or separate task?
-            # Prompt implies "leadership_crew (Architect + Tech Lead)".
-            # We can put both agents in the crew. The task is assigned to Architect.
-            # Ideally Tech Lead reviews it. Let's create a review subtask or assume collaboration if in same crew.
-            # But here we assign to Architect.
+            agent=self.architect_agent(),
             callback=self.task_callback
         )
 
@@ -169,6 +165,15 @@ class EmpresaSoftwareCrew:
             callback=self.task_callback
         )
 
+    @task
+    def audit_task(self) -> Task:
+        return Task(
+            config=self.tasks_config['audit_task'],
+            agent=self.tech_lead_agent(),
+            context=[self.blueprint_task(), self.infrastructure_task(), self.testing_task()],
+            callback=self.task_callback
+        )
+
     def task_callback(self, task_output):
         """Callback to log task completion."""
         try:
@@ -195,12 +200,8 @@ class EmpresaSoftwareCrew:
 
     @crew
     def leadership_crew(self) -> Crew:
-        # Architect and Tech Lead
-        # Task is blueprint_task (assigned to Architect).
-        # To involve Tech Lead, we might need a separate task or just have them in the crew for potential delegation if allowed.
-        # Simple approach: Architect does the work.
         return Crew(
-            agents=[self.architect_agent(), self.tech_lead_agent()],
+            agents=[self.architect_agent()],
             tasks=[self.blueprint_task()],
             process=Process.sequential,
             verbose=True
@@ -208,7 +209,6 @@ class EmpresaSoftwareCrew:
 
     @crew
     def development_crew(self) -> Crew:
-        # Backend + Review (Validation Gate)
         return Crew(
             agents=[self.backend_agent(), self.review_agent()],
             tasks=[self.coding_task(), self.validation_task()],
@@ -218,10 +218,18 @@ class EmpresaSoftwareCrew:
 
     @crew
     def execution_crew(self) -> Crew:
-        # Build (DevOps) + QA (Sandbox)
         return Crew(
             agents=[self.devops_agent(), self.qa_agent()],
             tasks=[self.infrastructure_task(), self.testing_task()],
+            process=Process.sequential,
+            verbose=True
+        )
+
+    @crew
+    def audit_crew(self) -> Crew:
+        return Crew(
+            agents=[self.tech_lead_agent()],
+            tasks=[self.audit_task()],
             process=Process.sequential,
             verbose=True
         )

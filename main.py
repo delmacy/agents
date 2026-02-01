@@ -51,7 +51,7 @@ class StatusResponse(BaseModel):
 
 def execute_multistage_build(job_id: str):
     """
-    Executes Phase 2 to 5 (Leadership -> Build -> Sandbox -> QA)
+    Executes Phase 2 to 5 (Leadership -> Build -> Sandbox -> QA -> Audit)
     """
     state_manager = StateManager()
     output_dir = f"output/{job_id}"
@@ -76,8 +76,6 @@ def execute_multistage_build(job_id: str):
             print(f">>> [Job {job_id}] Phase 2: Leadership/Design")
             leadership_crew = software_crew.leadership_crew()
             # Input is the final_plan.json. CrewAI needs inputs dict.
-            # We assume the agents read final_plan.json from disk using tools.
-            # But we pass a dummy input to trigger.
             leadership_crew.kickoff(inputs={'stage': 'design', 'job_id': job_id})
             state_manager.log_task(job_id, "Phase 2 (Design)", "COMPLETED", version, "Blueprint generated")
         except Exception as e:
@@ -90,7 +88,6 @@ def execute_multistage_build(job_id: str):
         try:
             print(f">>> [Job {job_id}] Phase 3: Development (Feedback: {feedback})")
             development_crew = software_crew.development_crew()
-            # Pass feedback to the inputs so the LLM context receives it
             development_crew.kickoff(inputs={
                 'stage': 'development',
                 'job_id': job_id,
@@ -106,7 +103,6 @@ def execute_multistage_build(job_id: str):
         # Check Validation Report
         report_path = os.path.join(output_dir, 'validation_report.json')
         is_valid = False
-        # Don't reset feedback here, we accumulate or replace it for next loop if fail
         current_feedback = ""
         missing = []
 
@@ -139,6 +135,41 @@ def execute_multistage_build(job_id: str):
              print(f"Error Phase 4: {e}")
              state_manager.log_task(job_id, "Phase 4 (QA)", "FAILED", version, str(e))
              state_manager.log_task(job_id, "Workflow", "FAILED", version, "Phase 4 failed")
+             return
+
+        # Phase 5: Technical Audit (Tech Lead)
+        print(f">>> [Job {job_id}] Phase 5: Audit")
+        try:
+            audit_crew = software_crew.audit_crew()
+            audit_crew.kickoff(inputs={'stage': 'audit', 'job_id': job_id})
+
+            # Check Audit Report
+            audit_path = os.path.join(output_dir, 'audit_report.json')
+            audit_status = "UNKNOWN"
+            audit_blockers = []
+            if os.path.exists(audit_path):
+                 try:
+                     with open(audit_path, 'r') as f:
+                         audit_report = json.load(f)
+                         audit_status = audit_report.get('status', 'REJECTED')
+                         audit_blockers = audit_report.get('blockers', [])
+                         audit_rec = audit_report.get('recommendation', '')
+                 except:
+                     audit_status = "CORRUPTED"
+
+            if audit_status != "APPROVED":
+                 print(f">>> [Job {job_id}] Audit Failed. Looping.")
+                 feedback = f"Audit Failed. Blockers: {audit_blockers}. Recommendation: {audit_rec}"
+                 state_manager.log_task(job_id, "Audit Gate", "RETRY_TRIGGERED", version, feedback)
+                 version += 1
+                 continue # Loop back to rebuild
+
+            state_manager.log_task(job_id, "Phase 5 (Audit)", "APPROVED", version, "Ready for delivery")
+
+        except Exception as e:
+             print(f"Error Phase 5: {e}")
+             state_manager.log_task(job_id, "Phase 5 (Audit)", "FAILED", version, str(e))
+             state_manager.log_task(job_id, "Workflow", "FAILED", version, "Phase 5 failed")
              return
 
         # Final Success
@@ -177,37 +208,25 @@ async def chat_planning(job_id: str, request: ChatRequest):
     state_manager = StateManager()
     state_manager.save_chat_message(job_id, "user", request.message)
 
-    # Here we invoke the Product Manager Agent to reply
-    # We use a specialized single-turn run or just the LLM directly?
-    # Using the Crew/Agent allows us to use tools (read files).
-
+    # Invoke Product Manager Agent
     software_crew = EmpresaSoftwareCrew(job_id=job_id)
-    # PM Agent needs to see history.
     history = state_manager.get_chat_history(job_id)
     history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in history])
 
-    # We construct a task input for the PM
     inputs = {
         "conversation_history": history_str,
         "current_message": request.message
     }
 
-    # Run Discovery Crew (Single Turn)
-    # The agent's goal is to "Engage in conversation...".
-    # We might need to adjust the Task description dynamically to say "Reply to user".
-    # But for now, let's assume the agent uses the context to reply and maybe update final_plan.json.
-
     try:
         discovery_crew = software_crew.discovery_crew()
         result = discovery_crew.kickoff(inputs=inputs)
-        # Result is the agent's output.
         response_text = str(result)
         state_manager.save_chat_message(job_id, "assistant", response_text)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     updated_history = state_manager.get_chat_history(job_id)
-    # Convert sqlite rows to list of dicts for response
     history_list = [{"role": row['role'], "content": row['content']} for row in updated_history]
 
     return ChatResponse(response=response_text, history=history_list)

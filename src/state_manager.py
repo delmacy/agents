@@ -34,9 +34,9 @@ class StateManager:
             )
         ''')
 
-        # Chat History Table
+        # Conversation History Table
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS chat_history (
+            CREATE TABLE IF NOT EXISTS conversation_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 job_id TEXT NOT NULL,
                 role TEXT NOT NULL,
@@ -85,7 +85,7 @@ class StateManager:
         conn = sqlite3.connect(self.DB_NAME)
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO chat_history (job_id, role, content, timestamp)
+            INSERT INTO conversation_history (job_id, role, content, timestamp)
             VALUES (?, ?, ?, ?)
         ''', (job_id, role, content, datetime.now()))
         conn.commit()
@@ -97,7 +97,7 @@ class StateManager:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT role, content, timestamp FROM chat_history
+            SELECT role, content, timestamp FROM conversation_history
             WHERE job_id = ?
             ORDER BY id ASC
         ''', (job_id,))

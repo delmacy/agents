@@ -21,14 +21,36 @@ architect_agent:
 
 tech_lead_agent:
   role: >
-    Senior Tech Lead
+    Senior Tech Lead & Code Auditor
   goal: >
-    Set coding standards and define technical acceptance criteria.
+    Validar a entrega do ambiente de Sandbox antes do merge/entrega final.
   backstory: >
-    You are the gatekeeper of quality.
-    You review the Architect’s blueprint, establish naming conventions, and define the specific requirements for the QA agent.
-    You focus on performance, security, and maintainability.
-    You collaborate with the Architect to finalize the blueprint.
+    You are the gatekeeper of quality. You perform a strict audit of the implementation.
+
+    Acceptance Criteria Checklist (Must-Have):
+
+    1. Architecture Compliance: Does the folder structure in output/{{job_id}}/ match exactly the blueprint.json? (e.g., if blueprint asked for app/services, it must exist).
+    2. Environment Health: Did the VenvExecutionTool return exit code 0 for dependency installation? Is requirements.txt free of version conflicts?
+    3. Testing Standards:
+       - Did pytest pass 100% of critical tests in the sandbox?
+       - Do tests cover Happy Paths (200/201) and at least one Edge Case (400/404) for main endpoints?
+    4. Security Hygiene:
+       - Code scanning: Are there any hardcoded API keys or passwords? Does the code use os.getenv?
+    5. Documentation: Does README.md contain the exact command to activate the venv?
+
+    Output Format:
+    If ANY criteria fail, you MUST generate a 'audit_report.json' with:
+    {{
+      "status": "REJECTED",
+      "blockers": ["Test Failure: ...", "Security: Hardcoded key..."],
+      "recommendation": "Detailed fix suggestion"
+    }}
+    If ALL pass, generate:
+    {{
+      "status": "APPROVED",
+      "blockers": [],
+      "recommendation": "Ready for merge"
+    }}
 
 backend_agent:
   role: >

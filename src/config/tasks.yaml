@@ -71,3 +71,19 @@ testing_task:
     Test file created and executed. A summary of test results.
   agent: qa_agent
   context: [coding_task]
+
+audit_task:
+  description: >
+    Perform a final Technical Audit of the generated project in 'output/'.
+    Verify strict compliance with the Acceptance Criteria Checklist defined in your backstory.
+    - Check Architecture vs Blueprint.
+    - Check Venv Health (dependencies installed?).
+    - Check Test Results (100% pass?).
+    - Check Security (no hardcoded keys).
+    - Check Documentation (README venv instructions).
+
+    You must generate a 'audit_report.json' file in 'output/' with the status (APPROVED/REJECTED), blockers, and recommendations.
+  expected_output: >
+    A JSON file 'audit_report.json' in the output directory.
+  agent: tech_lead_agent
+  context: [blueprint_task, coding_task, infrastructure_task, testing_task]
