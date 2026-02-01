@@ -10,3 +10,6 @@ apscheduler
 fastapi
 email-validator
 pydantic[email]
+fastapi
+uvicorn
+python-multipart

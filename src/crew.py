@@ -7,10 +7,12 @@ from src.state_manager import StateManager
 @CrewBase
 class EmpresaSoftwareCrew:
     """EmpresaSoftwareCrew crew"""
-    agents_config = 'config/agents.yaml'
-    tasks_config = 'config/tasks.yaml'
+    agents_config = 'src/config/agents.yaml'
+    tasks_config = 'src/config/tasks.yaml'
 
-    def __init__(self):
+    def __init__(self, job_id: str):
+        self.job_id = job_id
+        self.output_dir = f"output/{self.job_id}"
         self.worker_llm = self.configurar_worker_llm()
         self.state_manager = StateManager()
 
@@ -30,7 +32,7 @@ class EmpresaSoftwareCrew:
     def backend_agent(self) -> Agent:
         return Agent(
             config=self.agents_config['backend_agent'],
-            tools=[FileWriterTool()],
+            tools=[FileWriterTool(directory=self.output_dir)],
             verbose=True,
             llm=self.worker_llm,
             allow_delegation=False
@@ -40,7 +42,11 @@ class EmpresaSoftwareCrew:
     def review_agent(self) -> Agent:
         return Agent(
             config=self.agents_config['review_agent'],
-            tools=[FileWriterTool(), FileReadTool(), DirectoryReadTool(directory='./output')],
+            tools=[
+                FileWriterTool(directory=self.output_dir),
+                FileReadTool(directory=self.output_dir),
+                DirectoryReadTool(directory=self.output_dir)
+            ],
             verbose=True,
             llm=self.worker_llm,
             allow_delegation=False
@@ -50,7 +56,11 @@ class EmpresaSoftwareCrew:
     def devops_agent(self) -> Agent:
         return Agent(
             config=self.agents_config['devops_agent'],
-            tools=[FileWriterTool(), FileReadTool(), DirectoryReadTool(directory='./output')],
+            tools=[
+                FileWriterTool(directory=self.output_dir),
+                FileReadTool(directory=self.output_dir),
+                DirectoryReadTool(directory=self.output_dir)
+            ],
             verbose=True,
             llm=self.worker_llm,
             allow_delegation=False
@@ -60,7 +70,11 @@ class EmpresaSoftwareCrew:
     def qa_agent(self) -> Agent:
         return Agent(
             config=self.agents_config['qa_agent'],
-            tools=[FileWriterTool(), FileReadTool(), DirectoryReadTool(directory='./output')],
+            tools=[
+                FileWriterTool(directory=self.output_dir),
+                FileReadTool(directory=self.output_dir),
+                DirectoryReadTool(directory=self.output_dir)
+            ],
             verbose=True,
             llm=self.worker_llm,
             allow_delegation=False
@@ -104,13 +118,9 @@ class EmpresaSoftwareCrew:
     def task_callback(self, task_output):
         """Callback to log task completion to SQLite."""
         try:
-            # Depending on crewai version, task_output might be a string or object.
-            # We treat it safely.
             result_summary = str(task_output)[:200]
-            # Since we don't have task name easily in callback signature in some versions,
-            # we rely on the context or generic logging.
-            # Ideally, we'd pass task name, but standard callback signature is (task_output).
             self.state_manager.log_task(
+                job_id=self.job_id,
                 task_name="Unknown Task (Callback)",
                 status="SUCCESS",
                 details=result_summary

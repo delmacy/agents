@@ -23,6 +23,7 @@ class StateManager:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS task_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
                 task_name TEXT NOT NULL,
                 status TEXT NOT NULL,
                 version INTEGER DEFAULT 1,
@@ -30,31 +31,37 @@ class StateManager:
                 details TEXT
             )
         ''')
+        # Check if job_id column exists, if not add it (migration for existing DB)
+        cursor.execute("PRAGMA table_info(task_log)")
+        columns = [column[1] for column in cursor.fetchall()]
+        if 'job_id' not in columns:
+            cursor.execute("ALTER TABLE task_log ADD COLUMN job_id TEXT DEFAULT 'legacy'")
+
         conn.commit()
         conn.close()
 
-    def log_task(self, task_name: str, status: str, version: int = 1, details: str = ""):
+    def log_task(self, job_id: str, task_name: str, status: str, version: int = 1, details: str = ""):
         """Log a task status change to the database."""
         conn = sqlite3.connect(self.DB_NAME)
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO task_log (task_name, status, version, timestamp, details)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (task_name, status, version, datetime.now(), details))
+            INSERT INTO task_log (job_id, task_name, status, version, timestamp, details)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (job_id, task_name, status, version, datetime.now(), details))
         conn.commit()
         conn.close()
-        print(f"[StateManager] Logged task '{task_name}': {status} (v{version})")
+        print(f"[StateManager] Job {job_id} - Task '{task_name}': {status} (v{version})")
 
-    def get_latest_status(self, task_name: str):
-        """Get the latest log entry for a specific task."""
+    def get_job_status(self, job_id: str):
+        """Get all logs for a specific job."""
         conn = sqlite3.connect(self.DB_NAME)
+        conn.row_factory = sqlite3.Row  # Return rows as dictionaries
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT status, version, details FROM task_log
-            WHERE task_name = ?
+            SELECT task_name, status, version, timestamp, details FROM task_log
+            WHERE job_id = ?
             ORDER BY timestamp DESC
-            LIMIT 1
-        ''', (task_name,))
-        row = cursor.fetchone()
+        ''', (job_id,))
+        rows = [dict(row) for row in cursor.fetchall()]
         conn.close()
-        return row if row else None
+        return rows
