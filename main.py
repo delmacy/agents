@@ -198,7 +198,7 @@ async def start_planning(request: PlanStartRequest):
     os.makedirs(output_dir, exist_ok=True)
 
     state_manager = StateManager()
-    state_manager.log_task(job_id, "Phase 1 (Discovery)", "STARTED", 1, "Planning session initialized")
+    state_manager.log_task(job_id, "Workflow", "PLANNING", 1, "Planning session initialized")
 
     # If initial requirements provided, save them (maybe as a pseudo-chat or just file)
     if request.initial_requirements:

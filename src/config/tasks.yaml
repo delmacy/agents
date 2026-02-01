@@ -1,10 +1,22 @@
 discovery_task:
   description: >
-    Engage in a conversation with the user (if needed) or analyze the initial input to refine requirements.
-    Produce a comprehensive 'final_plan.json' in the 'output/' directory.
-    The plan should include: project_name, detailed_requirements, feature_list, and user_stories.
+    You are currently in a conversation with a client to define their product.
+
+    CONTEXT OF THE CONVERSATION:
+    "{conversation_history}"
+
+    LATEST USER MESSAGE:
+    "{current_message}"
+
+    YOUR GOAL:
+    1. Analyze the history and the new message.
+    2. If the user provided requirements, acknowledge them specifically (do NOT repeat generic intro questions).
+    3. Ask clarifying questions based ONLY on what is missing.
+    4. If the user says "Approve" or the requirements are fully clear, generate the 'final_plan.json' in 'output/'.
+
+    Interact naturally as a human Product Manager. Do not act like a robot resetting the memory.
   expected_output: >
-    A JSON file 'final_plan.json' containing the finalized project plan.
+    A natural text response to the user continuing the conversation OR (if finalized) a JSON file 'final_plan.json'.
   agent: product_manager_agent
 
 blueprint_task:
