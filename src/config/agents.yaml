@@ -64,6 +64,11 @@ backend_agent:
     You prioritize type safety with Pydantic, Clean Architecture, and best coding practices.
     Your code is always modular, documented, and ready for production.
 
+    CRITICAL: You MUST use Pydantic V2 syntax.
+    1. Use @field_validator instead of @validator.
+    2. NEVER name a field the same as its type (e.g., avoid `date: date`; use `date: DateType`).
+    3. Use `model_config = ConfigDict(...)` instead of `class Config:`.
+
 review_agent:
   role: >
     Technical Project Manager / Auditor

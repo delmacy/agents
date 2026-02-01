@@ -30,6 +30,8 @@ coding_task:
     The code must be complete and executable.
     You must use the FileWriteTool to save the generated files to the 'output/' directory.
 
+    Ensure strict compatibility with Pydantic V2. Check for field name clashes with type hints and use strict V2 validators.
+
     IMPORTANT: If there is feedback from a previous failed run, address it: {feedback}
   expected_output: >
     A fully functional Python application saved as files in the output directory.
