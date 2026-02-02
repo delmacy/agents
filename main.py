@@ -1,320 +1,198 @@
 import os
+# --- FORÇA UTF-8 ---
+os.environ["PYTHONUTF8"] = "1"
+
+# --- CARREGA .ENV EXPLICITAMENTE ---
+from dotenv import load_dotenv
+load_dotenv() # Carrega variáveis do arquivo .env para o os.environ
+
+# Validação Crítica
+if not os.getenv("DEEPSEEK_API_KEY"):
+    print("❌ ERRO CRÍTICO: DEEPSEEK_API_KEY não encontrada no arquivo .env")
+    exit(1)
+
 import sys
-import time
-import json
 import uuid
-from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+import json
+import logging
+import asyncio
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from dotenv import load_dotenv
+from typing import Optional, Dict, List
 
+# Imports internos
 from src.crew import EmpresaSoftwareCrew
 from src.state_manager import StateManager
 
-# Load environment variables
-load_dotenv()
-
+# --- DUAL LOGGER PARA TERMINAL ---
 class DualLogger:
     def __init__(self, filepath):
         self.terminal = sys.stdout
         self.log = open(filepath, "a", encoding="utf-8")
-
     def write(self, message):
         self.terminal.write(message)
         self.log.write(message)
         self.log.flush()
-
     def flush(self):
         self.terminal.flush()
         self.log.flush()
 
-app = FastAPI(title="Empresa de Agentes Factory Server (Full-Chain)")
+app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins for local dev
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Models ---
-class PlanStartRequest(BaseModel):
+class PlanRequest(BaseModel):
     initial_requirements: Optional[str] = None
-
-class PlanStartResponse(BaseModel):
-    job_id: str
-    status: str
-    message: str
 
 class ChatRequest(BaseModel):
     message: str
 
-class ChatResponse(BaseModel):
-    response: str
-    history: List[Dict[str, str]]
-
-class ApproveRequest(BaseModel):
-    feedback: Optional[str] = None
-
-class TaskLog(BaseModel):
-    task_name: str
-    status: str
-    version: int
-    timestamp: str
-    details: Optional[str] = None
-
 class StatusResponse(BaseModel):
     job_id: str
     status: str
-    tasks: List[TaskLog]
+    tasks: List[Dict]
 
-# --- Workflow Logic ---
-
-def execute_multistage_build(job_id: str):
-    """
-    Executes Phase 2 to 5 (Leadership -> Build -> Sandbox -> QA -> Audit)
-    """
+# --- WORKFLOW ENGINE ---
+def execute_factory_assembly_line(job_id: str):
+    """Executa a linha de montagem: Planejamento -> Loop (Código -> Teste -> Correção)"""
     state_manager = StateManager()
-    output_dir = f"output/{job_id}"
-
-    # Ensure output directory exists (should exist from Discovery, but safety check)
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    log_file = os.path.join(output_dir, "full_execution.log")
-    sys.stdout = DualLogger(log_file)
-
-    max_retries = 3
-    version = 1
-    feedback = ""
-
-    state_manager.log_task(job_id, "Workflow", "STARTED_BUILD", version, "Build phases started")
-
-    while version <= max_retries:
-        print(f"\n>>> [Job {job_id}] Starting Build Cycle (Version {version})")
-
-        software_crew = EmpresaSoftwareCrew(job_id=job_id)
-
-        # Phase 2: Design (Leadership)
-        try:
-            print(f">>> [Job {job_id}] Phase 2: Leadership/Design")
-            leadership_crew = software_crew.leadership_crew()
-            # Input is the final_plan.json. CrewAI needs inputs dict.
-            leadership_crew.kickoff(inputs={'stage': 'design', 'job_id': job_id})
-            state_manager.log_task(job_id, "Phase 2 (Design)", "COMPLETED", version, "Blueprint generated")
-        except Exception as e:
-            print(f"Error Phase 2: {e}")
-            state_manager.log_task(job_id, "Phase 2 (Design)", "CRASHED", version, str(e))
-            feedback = f"System Crashed in Phase 2 with error: {str(e)}. Retrying..."
-            version += 1
-            continue
-
-        # Phase 3: Build & Validation (Development)
-        try:
-            print(f">>> [Job {job_id}] Phase 3: Development (Feedback: {feedback})")
-            development_crew = software_crew.development_crew()
-            development_crew.kickoff(inputs={
-                'stage': 'development',
-                'job_id': job_id,
-                'feedback': feedback if version > 1 else 'None'
-            })
-            state_manager.log_task(job_id, "Phase 3 (Build)", "COMPLETED", version, "Code implemented")
-        except Exception as e:
-            print(f"Error Phase 3: {e}")
-            state_manager.log_task(job_id, "Phase 3 (Build)", "CRASHED", version, str(e))
-            feedback = f"System Crashed in Phase 3 with error: {str(e)}. Retrying..."
-            version += 1
-            continue
-
-        # Check Validation Report
-        report_path = os.path.join(output_dir, 'validation_report.json')
-        is_valid = False
-        current_feedback = ""
-        missing = []
-
-        if os.path.exists(report_path):
-            try:
-                with open(report_path, 'r') as f:
-                    report = json.load(f)
-                    is_valid = report.get('is_valid', False)
-                    current_feedback = report.get('feedback', '')
-                    missing = report.get('missing_features', [])
-            except:
-                current_feedback = "Corrupted validation report"
-        else:
-            current_feedback = "Missing validation report"
-
-        if not is_valid:
-            print(f">>> [Job {job_id}] Validation Failed. Looping.")
-            feedback = f"Previous attempt failed. Feedback: {current_feedback}. Missing: {missing}."
-            state_manager.log_task(job_id, "Validation Gate", "RETRY_TRIGGERED", version, feedback)
-            version += 1
-            continue # Retry loop
-
-        # Phase 4: Sandbox & QA (Execution)
-        print(f">>> [Job {job_id}] Phase 4: Sandbox & QA")
-        try:
-            execution_crew = software_crew.execution_crew()
-            execution_crew.kickoff(inputs={'stage': 'execution', 'job_id': job_id})
-            state_manager.log_task(job_id, "Phase 4 (QA)", "COMPLETED", version, "Sandbox tests ran")
-        except Exception as e:
-             print(f"Error Phase 4: {e}")
-             state_manager.log_task(job_id, "Phase 4 (QA)", "CRASHED", version, str(e))
-             feedback = f"System Crashed in Phase 4 with error: {str(e)}. Retrying..."
-             version += 1
-             continue
-
-        # Phase 5: Technical Audit (Tech Lead)
-        print(f">>> [Job {job_id}] Phase 5: Audit")
-        try:
-            audit_crew = software_crew.audit_crew()
-            audit_crew.kickoff(inputs={'stage': 'audit', 'job_id': job_id})
-
-            # Check Audit Report
-            audit_path = os.path.join(output_dir, 'audit_report.json')
-            audit_status = "UNKNOWN"
-            audit_blockers = []
-            if os.path.exists(audit_path):
-                 try:
-                     with open(audit_path, 'r') as f:
-                         audit_report = json.load(f)
-                         audit_status = audit_report.get('status', 'REJECTED')
-                         audit_blockers = audit_report.get('blockers', [])
-                         audit_rec = audit_report.get('recommendation', '')
-                 except:
-                     audit_status = "CORRUPTED"
-
-            if audit_status != "APPROVED":
-                 print(f">>> [Job {job_id}] Audit Failed. Looping.")
-                 feedback = f"Audit Failed. Blockers: {audit_blockers}. Recommendation: {audit_rec}"
-                 state_manager.log_task(job_id, "Audit Gate", "RETRY_TRIGGERED", version, feedback)
-                 version += 1
-                 continue # Loop back to rebuild
-
-            state_manager.log_task(job_id, "Phase 5 (Audit)", "APPROVED", version, "Ready for delivery")
-
-        except Exception as e:
-             print(f"Error Phase 5: {e}")
-             state_manager.log_task(job_id, "Phase 5 (Audit)", "CRASHED", version, str(e))
-             feedback = f"System Crashed in Phase 5 with error: {str(e)}. Retrying..."
-             version += 1
-             continue
-
-        # Final Success
-        print(f">>> [Job {job_id}] Workflow Complete")
-        state_manager.log_task(job_id, "Workflow", "SUCCESS", version, "Delivery Ready")
-        return
-
-    state_manager.log_task(job_id, "Workflow", "FAILED", version, "Max retries reached")
-
-
-# --- Endpoints ---
-
-@app.post("/plan/start", response_model=PlanStartResponse)
-async def start_planning(request: PlanStartRequest):
-    job_id = str(uuid.uuid4())
     output_dir = f"output/{job_id}"
     os.makedirs(output_dir, exist_ok=True)
-
-    state_manager = StateManager()
-    state_manager.log_task(job_id, "Workflow", "PLANNING", 1, "Planning session initialized")
-
-    # If initial requirements provided, save them (maybe as a pseudo-chat or just file)
-    if request.initial_requirements:
-        with open(f"{output_dir}/initial_requirements.txt", "w") as f:
-            f.write(request.initial_requirements)
-        state_manager.save_chat_message(job_id, "user", request.initial_requirements)
-
-    return PlanStartResponse(job_id=job_id, status="planning", message="Job started. Use /plan/chat/{job_id} to refine requirements.")
-
-@app.post("/plan/chat/{job_id}", response_model=ChatResponse)
-async def chat_planning(job_id: str, request: ChatRequest):
-    output_dir = f"output/{job_id}"
-    if not os.path.exists(output_dir):
-        raise HTTPException(status_code=404, detail="Job ID not found")
-
-    state_manager = StateManager()
-    state_manager.save_chat_message(job_id, "user", request.message)
-
-    # Invoke Product Manager Agent
-    software_crew = EmpresaSoftwareCrew(job_id=job_id)
-    history = state_manager.get_chat_history(job_id)
-    history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in history])
-
-    inputs = {
-        "conversation_history": history_str,
-        "current_message": request.message
-    }
+    
+    # Redireciona Logs
+    sys.stdout = DualLogger(os.path.join(output_dir, "execution.log"))
 
     try:
-        discovery_crew = software_crew.discovery_crew()
-        result = discovery_crew.kickoff(inputs=inputs)
-        response_text = str(result)
-        state_manager.save_chat_message(job_id, "assistant", response_text)
+        # 1. PLANEJAMENTO (Arquitetura + Lógica + Work Orders)
+        print(f"🚀 [Job {job_id}] STARTING PLANNING PHASE...")
+        state_manager.log_task(job_id, "Planning Phase", "EXECUTING", 1, "Defining Logic & Sprints")
+        
+        planning_crew = EmpresaSoftwareCrew(job_id)
+        # Assume que o discovery já ocorreu no chat. O kickoff agora roda arquitetura e sprint planning.
+        # Inputs podem ser vazios pois ele lê o histórico
+        planning_crew.planning_crew().kickoff()
+        
+        state_manager.log_task(job_id, "Planning Phase", "SUCCESS", 1, "Work Orders Created")
+
+        # 2. CICLO DE CONSTRUÇÃO E QUALIDADE
+        max_retries = 3
+        attempt = 1
+        feedback = "" # Começa vazio
+
+        while attempt <= max_retries:
+            print(f"\n🔄 [Job {job_id}] BUILD CYCLE {attempt}/{max_retries}")
+            
+            # A. CODIFICAÇÃO (Inputs: Work Orders + Feedback)
+            state_manager.log_task(job_id, f"Build Cycle {attempt}", "CODING", attempt, "Translating Logic...")
+            coding_inputs = {"feedback": feedback}
+            
+            coding_crew = EmpresaSoftwareCrew(job_id)
+            coding_crew.coding_crew().kickoff(inputs=coding_inputs)
+            
+            # B. QUALIDADE (Testes)
+            print(f"🧪 [Job {job_id}] RUNNING QA...")
+            state_manager.log_task(job_id, f"Build Cycle {attempt}", "TESTING", attempt, "Running Pytest...")
+            
+            qa_crew = EmpresaSoftwareCrew(job_id)
+            qa_result = qa_crew.qa_crew().kickoff()
+            qa_output = str(qa_result)
+
+            # C. DECISÃO
+            if "FAILED" in qa_output or "Error" in qa_output or "FAILURES" in qa_output:
+                print(f"❌ [Job {job_id}] TESTS FAILED.")
+                feedback = f"Previous code failed tests. FIX THESE ERRORS:\n{qa_output[-2000:]}" # Pega os ultimos erros
+                state_manager.log_task(job_id, f"Build Cycle {attempt}", "FAILED", attempt, "Tests failed. Retrying...")
+                attempt += 1
+            else:
+                print(f"✅ [Job {job_id}] TESTS PASSED! SOFTWARE READY.")
+                state_manager.log_task(job_id, "Workflow", "SUCCESS", attempt, "All tests passed.")
+                return
+
+        # Se saiu do while, falhou
+        state_manager.log_task(job_id, "Workflow", "FAILED", attempt, "Max retries exceeded.")
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"💀 CRITICAL ERROR: {e}")
+        state_manager.log_task(job_id, "Workflow", "CRASHED", 0, str(e))
 
-    updated_history = state_manager.get_chat_history(job_id)
-    history_list = [{"role": row['role'], "content": row['content']} for row in updated_history]
+# --- ENDPOINTS ---
 
-    return ChatResponse(response=response_text, history=history_list)
+@app.post("/plan/start")
+async def start_plan(req: PlanRequest):
+    job_id = str(uuid.uuid4())
+    manager = StateManager()
+    manager.create_job(job_id)
+    
+    # Inicia com Fase de Descoberta (apenas chat, sem background task pesada ainda)
+    manager.log_task(job_id, "Phase 1 (Discovery)", "PLANNING", 1, "Waiting for user input")
+    
+    # Se usuário mandou requisito inicial, já processa
+    if req.initial_requirements:
+         # Aqui poderíamos invocar o PM agente de forma síncrona ou assíncrona
+         pass
+         
+    return {"job_id": job_id, "status": "PLANNING"}
+
+@app.post("/plan/chat/{job_id}")
+async def chat_pm(job_id: str, req: ChatRequest):
+    # Chat Síncrono com PM
+    crew_instance = EmpresaSoftwareCrew(job_id)
+    pm_agent = crew_instance.product_manager_agent()
+    
+    # Simples invocação direta do agente (poderia ser via Task se quisesse persistir tudo)
+    # Nota: Em produção, usar state para manter histórico real
+    from crewai import Task
+    discovery_task = Task(
+        description=f"User says: '{req.message}'. Reply as Product Manager. Context: Conversation history.",
+        expected_output="Response string",
+        agent=pm_agent
+    )
+    
+    response = discovery_task.execute_sync() # Execução leve
+    return {"response": str(response)}
 
 @app.post("/plan/approve/{job_id}")
-async def approve_plan(job_id: str, request: ApproveRequest, background_tasks: BackgroundTasks):
-    output_dir = f"output/{job_id}"
-    if not os.path.exists(output_dir):
-        raise HTTPException(status_code=404, detail="Job ID not found")
+async def approve_plan(job_id: str):
+    # Dispara a Thread de Background
+    import threading
+    thread = threading.Thread(target=execute_factory_assembly_line, args=(job_id,))
+    thread.start()
+    return {"status": "Build Started"}
 
-    state_manager = StateManager()
-
-    # If fast path requirements provided in feedback
-    if request.feedback:
-        # Treat as final requirements
-        with open(f"{output_dir}/final_plan.json", "w") as f:
-            json.dump({"requirements": request.feedback, "approved": True}, f)
-        state_manager.save_chat_message(job_id, "user", f"APPROVED with feedback: {request.feedback}")
-    else:
-        state_manager.save_chat_message(job_id, "user", "APPROVED")
-
-    # Trigger Background Execution
-    background_tasks.add_task(execute_multistage_build, job_id)
-
-    return {"status": "build_started", "message": "Plan approved. Build pipeline initiated."}
-
-@app.get("/status/{job_id}", response_model=StatusResponse)
+@app.get("/status/{job_id}")
 async def get_status(job_id: str):
     state_manager = StateManager()
     logs = state_manager.get_job_status(job_id)
-
+    
     if not logs:
-        if not os.path.exists(f"output/{job_id}"):
-             raise HTTPException(status_code=404, detail="Job ID not found")
-        current_status = "PLANNING"
-    else:
-        latest_log = logs[0]
-        if latest_log['task_name'] == "Workflow":
-             current_status = latest_log['status']
-        else:
-             current_status = "IN_PROGRESS"
+        return {"job_id": job_id, "status": "PLANNING", "tasks": []}
+    
+    # Lógica de Status
+    status = "IN_PROGRESS"
+    latest = logs[0]
+    
+    if latest['task_name'] == "Workflow":
+        status = latest['status'] # SUCCESS / FAILED
+    elif latest['task_name'] == "Planning Phase" and latest['status'] == "EXECUTING":
+        status = "PLANNING"
+        
+    return {"job_id": job_id, "status": status, "tasks": logs}
 
-    task_logs = []
-    for log in logs:
-        task_logs.append(TaskLog(
-            task_name=log['task_name'],
-            status=log['status'],
-            version=log['version'],
-            timestamp=str(log['timestamp']),
-            details=str(log['details']) if log['details'] else None
-        ))
-
-    return StatusResponse(
-        job_id=job_id,
-        status=current_status,
-        tasks=task_logs
-    )
+@app.get("/project-structure/{job_id}")
+async def get_project_structure(job_id: str):
+    path = f"output/{job_id}/system_architecture.json"
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            return json.load(f)
+    return {"modules": []}
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="localhost", port=8000)

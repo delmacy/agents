@@ -2,193 +2,192 @@ import streamlit as st
 import requests
 import time
 import pandas as pd
+import json
 
-API_URL = "http://localhost:8000"
+# --- Configuração ---
+API_URL = "http://127.0.0.1:8000"
+st.set_page_config(page_title="AI Dev Studio", page_icon="⚡", layout="wide")
 
-st.set_page_config(
-    page_title="Factory Dashboard",
-    page_icon="🏭",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+# --- CSS Moderno ---
+st.markdown("""
+<style>
+    /* Sidebar */
+    section[data-testid="stSidebar"] { background-color: #f8f9fa; border-right: 1px solid #dee2e6; }
+    .project-item { padding: 8px; border-radius: 5px; cursor: pointer; color: #333; }
+    .project-item:hover { background-color: #e9ecef; }
+    
+    /* Logs e Árvore */
+    .tree-node { font-size: 0.9em; margin-left: 10px; }
+    .log-entry { font-family: 'Courier New', monospace; font-size: 0.8em; color: #444; margin-bottom: 4px; border-bottom: 1px solid #eee; }
+    .log-timestamp { color: #888; font-size: 0.75em; margin-right: 8px; }
+    
+    /* Chat Area */
+    .stChatMessage { background-color: transparent; }
+    .stChatMessage.user { background-color: #f0f2f6; }
+</style>
+""", unsafe_allow_html=True)
 
-st.title("🏭 AI Software Factory Dashboard")
+# --- Estado ---
+if "job_id" not in st.session_state: st.session_state["job_id"] = None
+if "messages" not in st.session_state: st.session_state["messages"] = []
+if "selected_node" not in st.session_state: st.session_state["selected_node"] = None
+if "last_log_count" not in st.session_state: st.session_state["last_log_count"] = 0
 
-# --- Sidebar ---
+# --- Helpers ---
+def get_structure(job_id):
+    try:
+        res = requests.get(f"{API_URL}/project-structure/{job_id}")
+        return res.json() if res.status_code == 200 else None
+    except: return None
+
+def get_status(job_id):
+    try:
+        res = requests.get(f"{API_URL}/status/{job_id}")
+        return res.json() if res.status_code == 200 else None
+    except: return None
+
+# ==============================================================================
+# SIDEBAR
+# ==============================================================================
 with st.sidebar:
-    st.header("🚀 Control Center")
-
-    if st.button("New Project", type="primary"):
-        try:
-            response = requests.post(f"{API_URL}/plan/start", json={})
-            if response.status_code == 200:
-                data = response.json()
-                st.session_state["job_id"] = data["job_id"]
-                st.session_state["status"] = "PLANNING"
-                st.success(f"Started Job: {data['job_id']}")
-                st.rerun()
-            else:
-                st.error(f"Failed to start: {response.text}")
-        except Exception as e:
-            st.error(f"Connection Error: {e}")
+    st.title("⚡ AI Dev Studio")
+    
+    # 1. New Project
+    with st.expander("🆕 New Project", expanded=not st.session_state["job_id"]):
+        new_idea = st.text_area("What are we building?", height=100, placeholder="E.g. A CRM with Python...")
+        if st.button("Start Building", type="primary", use_container_width=True):
+            if new_idea:
+                try:
+                    res = requests.post(f"{API_URL}/plan/start", json={"initial_requirements": new_idea})
+                    if res.status_code == 200:
+                        data = res.json()
+                        st.session_state["job_id"] = data["job_id"]
+                        st.session_state["messages"] = [{"role": "user", "content": new_idea}]
+                        st.session_state["last_log_count"] = 0
+                        st.rerun()
+                except Exception as e: st.error(f"Error: {e}")
 
     st.divider()
 
-    job_id_input = st.text_input("Load Job ID", value=st.session_state.get("job_id", ""))
-    if st.button("Load"):
-        if job_id_input:
-            st.session_state["job_id"] = job_id_input
-            st.rerun()
+    # 2. Load Project
+    col_load, col_btn = st.columns([3, 1])
+    job_input = col_load.text_input("Project ID", placeholder="UUID...", label_visibility="collapsed")
+    if col_btn.button("📂"):
+        st.session_state["job_id"] = job_input
+        st.rerun()
 
-    if "job_id" in st.session_state:
-        st.info(f"**Active Job ID:**\n`{st.session_state['job_id']}`")
-        st.write(f"**Status:** {st.session_state.get('status', 'UNKNOWN')}")
+    st.divider()
 
-# --- Main Logic ---
+    # 3. Project Tree
+    if st.session_state["job_id"]:
+        st.caption(f"ID: `{st.session_state['job_id'][:8]}...`")
+        structure = get_structure(st.session_state["job_id"])
+        
+        if structure and structure.get("modules"):
+            st.markdown("### 📂 Architecture")
+            for module in structure.get("modules", []):
+                with st.expander(f"📦 {module.get('name', 'Module')}"):
+                    for cls in module.get("classes", []):
+                        cls_name = cls.get('name', 'Class')
+                        if st.button(f"📄 {cls_name}", key=cls_name):
+                            st.session_state["selected_node"] = f"{module['name']}/{cls_name}"
+                            st.session_state["messages"].append({
+                                "role": "system", 
+                                "content": f"Context switched to: **{cls_name}**"
+                            })
+                            st.rerun()
+        else:
+            st.info("Waiting for Architecture...")
 
-if "job_id" not in st.session_state:
-    st.warning("👈 Start a New Project or Load an Existing Job ID to begin.")
+# ==============================================================================
+# MAIN CHAT AREA
+# ==============================================================================
+
+if not st.session_state["job_id"]:
+    st.info("👈 Start a new project to begin.")
     st.stop()
 
-job_id = st.session_state["job_id"]
+# Header
+if st.session_state["selected_node"]:
+    st.caption(f"Editing Context: {st.session_state['selected_node']}")
+else:
+    st.caption("General Context")
 
-tab1, tab2 = st.tabs(["🧠 Planner Agent (Discovery)", "🏭 Factory Floor (Build Monitor)"])
+# Render History
+chat_container = st.container()
+with chat_container:
+    for msg in st.session_state["messages"]:
+        if msg["role"] == "system":
+            st.caption(msg["content"])
+        else:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
 
-# --- Tab 1: Planner Agent ---
-with tab1:
-    st.subheader("Interactive Planning Phase")
+# --- LIVE LOG STREAMING LOGIC ---
+# Buscamos o status atual para saber se há novos logs para mostrar
+status_data = get_status(st.session_state["job_id"])
+current_logs = status_data.get("tasks", []) if status_data else []
+total_logs = len(current_logs)
+new_logs_count = total_logs - st.session_state["last_log_count"]
 
-    # Check status first to see if we are still planning
-    try:
-        status_res = requests.get(f"{API_URL}/status/{job_id}")
-        if status_res.status_code == 200:
-            status_data = status_res.json()
-            st.session_state["status"] = status_data["status"]
-    except:
-        pass
+# Se houver logs novos ou se estivermos rodando, mostramos o container de status
+is_running = status_data and status_data.get("status") in ["IN_PROGRESS", "EXECUTING", "PLANNING"]
 
-    # Chat Interface
-    # Load history if available
-    # Note: The API /plan/chat returns history on POST, but we might want to just fetch current state.
-    # Currently app.py doesn't have a GET /chat history endpoint, but we can rely on local session state
-    # or the fact that /plan/chat response includes history.
-    # Ideally we should have fetched history.
-    # For now, let's store chat history in session state.
-
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-
-    # Display chat messages
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    # Chat Input
-    if st.session_state.get("status") == "PLANNING":
-        if prompt := st.chat_input("Describe your software requirements..."):
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.markdown(prompt)
-
-            with st.chat_message("assistant"):
-                with st.spinner("Product Manager is thinking..."):
-                    try:
-                        res = requests.post(f"{API_URL}/plan/chat/{job_id}", json={"message": prompt})
-                        if res.status_code == 200:
-                            data = res.json()
-                            response_text = data["response"]
-                            st.markdown(response_text)
-                            st.session_state.messages.append({"role": "assistant", "content": response_text})
-                            # Update full history from server just in case
-                            # st.session_state.messages = data["history"]
-                        else:
-                            st.error("Failed to send message.")
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-
-        st.divider()
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            if st.button("✅ APPROVE PLAN", type="primary", use_container_width=True):
-                with st.spinner("Approving and starting build..."):
-                    try:
-                        res = requests.post(f"{API_URL}/plan/approve/{job_id}", json={})
-                        if res.status_code == 200:
-                            st.success("Plan Approved! Factory started.")
-                            st.session_state["status"] = "IN_PROGRESS"
-                            time.sleep(1)
-                            st.rerun()
-                        else:
-                            st.error(f"Approval failed: {res.text}")
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-    else:
-        st.info("Plan approved. Factory is executing.")
-
-# --- Tab 2: Factory Floor ---
-with tab2:
-    st.subheader("Live Build Monitor")
-
-    if st.session_state.get("status") == "PLANNING":
-        st.info("Waiting for plan approval...")
-    else:
-        placeholder = st.empty()
-
-        # Auto-refresh loop
-        # In Streamlit, a simple way to 'poll' is using st.empty and rerun,
-        # but rerun refreshes the whole page which resets chat input.
-        # Better to use a container that updates if we are in a 'while' loop,
-        # but Streamlit runs script top-to-bottom.
-        # Standard pattern: use st.rerun() with a sleep at the end if we want continuous updates,
-        # but that blocks interaction in Tab 1.
-        # We will just fetch once per render and provide a manual refresh or
-        # rely on st.fragment (if available in newer streamlit) or just button.
-        # User requested "Auto-Refresh: Use st.empty() or a loop to poll ... every 2 seconds".
-        # A blocking loop prevents Sidebar interaction.
-        # We will implement a loop that breaks if user interacts?
-        # Actually, st.autorefresh is a custom component.
-        # We will use a simple button for manual refresh + auto refresh logic if 'active'.
-
-        # Simple polling loop within the container for visual effect if 'status' is running
-
-        refresh = st.checkbox("Auto-Refresh Log", value=True)
-
-        if refresh:
-            time.sleep(2)
-            st.rerun()
-
-        try:
-            status_res = requests.get(f"{API_URL}/status/{job_id}")
-            if status_res.status_code == 200:
-                status_data = status_res.json()
-                current_status = status_data["status"]
-                tasks = status_data["tasks"]
-
-                # Status Badge
-                color = "blue"
-                if current_status == "SUCCESS": color = "green"
-                elif current_status == "FAILED": color = "red"
-
-                st.markdown(f"### Status: :{color}[{current_status}]")
-
-                # Task Log
-                if tasks:
-                    df = pd.DataFrame(tasks)
-                    st.dataframe(
-                        df[["timestamp", "task_name", "status", "version", "details"]],
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                else:
-                    st.write("No tasks logged yet.")
-
-                # Artifacts
-                if current_status == "SUCCESS":
-                    st.success("Build Complete!")
-                    st.write(f"**Artifacts Location:** `output/{job_id}/`")
-                    # Ideally allow download zip, but path display is requested.
-
+if is_running or new_logs_count > 0:
+    # Cria uma caixa de status que se parece com um terminal
+    with st.status("🤖 Factory Activity", expanded=is_running) as status_box:
+        # Renderiza apenas os logs mais recentes (ou todos se quiser)
+        # Filtramos para mostrar steps e tasks
+        recent_logs = current_logs[-20:] # Mostra os ultimos 20 para não travar
+        
+        for log in recent_logs:
+            # Formata log baseado no tipo
+            if log['task_name'] == "Agent Thinking...":
+                st.markdown(f":brain: `{log['details'][:120]}...`")
+            elif log['status'] == "SUCCESS":
+                st.markdown(f"✅ **{log['task_name']}**: Completed")
+            elif log['status'] == "FAILED":
+                st.markdown(f"❌ **{log['task_name']}**: Failed")
             else:
-                st.error("Could not fetch status.")
-        except Exception as e:
-            st.error(f"Connection Error: {e}")
+                st.markdown(f"⚙️ {log['task_name']}")
+        
+        # Atualiza contagem
+        st.session_state["last_log_count"] = total_logs
+
+# Input Area
+if prompt := st.chat_input("Instruções..."):
+    # 1. Add User Message
+    st.session_state["messages"].append({"role": "user", "content": prompt})
+    with chat_container:
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+    # 2. Logic Handler
+    if "approv" in prompt.lower() or "build" in prompt.lower():
+        # APROVAÇÃO (Assíncrona - Inicia Factory)
+        try:
+            requests.post(f"{API_URL}/plan/approve/{st.session_state['job_id']}", json={})
+            st.session_state["messages"].append({"role": "system", "content": "🚀 **Factory Started!** Watch the logs below."})
+            st.rerun()
+        except Exception as e: st.error(f"API Error: {e}")
+        
+    else:
+        # CHAT (Síncrono - PM)
+        # Mostramos um spinner diferente enquanto aguarda o PM
+        with st.status("Product Manager is thinking...", expanded=True):
+            try:
+                res = requests.post(
+                    f"{API_URL}/plan/chat/{st.session_state['job_id']}", 
+                    json={"message": prompt}
+                )
+                if res.status_code == 200:
+                    response = res.json()["response"]
+                    st.session_state["messages"].append({"role": "assistant", "content": response})
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Chat Error: {e}")
+
+# Auto-Refresh para "Streaming"
+if is_running:
+    time.sleep(2) # Polling de 2 segundos
+    st.rerun()

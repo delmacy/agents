@@ -1,113 +1,89 @@
 discovery_task:
   description: >
-    You are currently in a conversation with a client to define their product.
-
-    CONTEXT OF THE CONVERSATION:
-    "{conversation_history}"
-
-    LATEST USER MESSAGE:
-    "{current_message}"
-
-    YOUR GOAL:
-    1. Analyze the history and the new message.
-    2. If the user provided requirements, acknowledge them specifically (do NOT repeat generic intro questions).
-    3. Ask clarifying questions based ONLY on what is missing.
-    4. If the user says "Approve" or the requirements are fully clear, generate the 'final_plan.json' in 'output/'.
-
-    Interact naturally as a human Product Manager. Do not act like a robot resetting the memory.
+    Conversation with user.
+    CONTEXT: "{conversation_history}"
+    LATEST: "{current_message}"
+    Goal: Define 'final_plan.json'.
   expected_output: >
-    A natural text response to the user continuing the conversation OR (if finalized) a JSON file 'final_plan.json'.
+    Response string or 'final_plan.json'.
   agent: product_manager_agent
 
-blueprint_task:
+architecture_task:
   description: >
-    Analyze the 'final_plan.json'.
-    Design the software architecture, folder structure, and database schema.
-    Define the stack (FastAPI, SQLite, Pydantic) and libraries.
-    Create a 'blueprint.json' file in 'output/' that strictly defines:
-    - File structure (paths and descriptions)
-    - Data models (tables/fields)
-    - API Endpoints (methods, paths, inputs, outputs)
-    The Backend Agent will use this EXACT blueprint to write code.
+    Analyze 'final_plan.json'.
+    Define Directory Structure and Database Schema.
+    Create 'system_architecture.json' in 'output/'.
   expected_output: >
-    A JSON file 'blueprint.json' containing the technical architecture.
+    A JSON file defining the high-level architecture.
   agent: architect_agent
+
+logic_specification_task:
+  description: >
+    Analyze 'system_architecture.json'.
+    Write Detailed Algorithmic Logic for every method in 'technical_spec.md'.
+    Use the strict Markdown format defined in your role.
+  expected_output: >
+    A comprehensive Markdown file 'technical_spec.md'.
+  agent: technical_designer_agent
+  context: [architecture_task]
+
+sprint_planning_task:
+  description: >
+    ANALYZE 'system_architecture.json' and 'technical_spec.md'.
+    Create a detailed execution plan JSON file named 'work_orders.json'.
+    List files to be created in order of dependency.
+  expected_output: >
+    A JSON file 'work_orders.json'.
+  agent: scrum_master_agent
+  context: [logic_specification_task, architecture_task]
 
 coding_task:
   description: >
-    Read and analyze the 'blueprint.json' file in 'output/'.
-    Implement the full backend solution strictly following the blueprint.
-    Use Python, FastAPI, and Pydantic.
-    Follow Clean Code principles.
-    The code must be complete and executable.
-    You must use the FileWriteTool to save the generated files to the 'output/' directory.
-
-    Ensure strict compatibility with Pydantic V2. Check for field name clashes with type hints and use strict V2 validators.
-
-    IMPORTANT: If there is feedback from a previous failed run, address it: {feedback}
+    EXECUTE the 'work_orders.json'.
+    Translate logic from 'technical_spec.md' into Python code.
+    
+    ### CRITICAL - FIX MODE ###
+    Check if there is feedback from QA:
+    FEEDBACK: "{feedback}"
+    
+    IF feedback exists (it means previous code FAILED):
+    1. Read the error message.
+    2. REWRITE the code to fix the error while maintaining the logic.
+    
+    IF no feedback:
+    Generate code strictly according to specs.
   expected_output: >
-    A fully functional Python application saved as files in the output directory.
+    Corrected Python source code files.
   agent: backend_agent
-  context: [blueprint_task]
+  context: [sprint_planning_task, logic_specification_task]
 
-validation_task:
+environment_setup_task:
   description: >
-    Analyze the files generated in the 'output/' directory.
-    Check if the files match the structure defined in 'blueprint.json'.
-    Verify if main.py, models.py, schemas.py, requirements.txt exist and are valid.
-
-    MANDATORY SMOKE TEST: Before generating the report, you MUST attempt to load the application to catch ImportErrors or Pydantic configuration errors.
-    1. Use venv_execution_tool to install dependencies: pip install -r requirements.txt.
-    2. Use venv_execution_tool to run a strict import check: python -c 'import sys; sys.path.append("."); from app.api.v1.api import api_router; print("Import OK")' (Adjust the import path based on the generated structure).
-
-    CRITICAL: If the command returns ANY error in stderr (Traceback, PydanticUserError, etc.):
-    - Set is_valid: false.
-    - Copy the EXACT traceback into feedback.
-    - List the specific error in missing_features (e.g., 'Runtime Crash: Pydantic Configuration Error').
-
-    Create a 'validation_report.json' file in 'output/' containing:
-    {{
-      "is_valid": boolean,
-      "missing_features": [list of strings],
-      "feedback": "detailed feedback string"
-    }}
+    1. Check if 'requirements.txt' exists.
+    2. Run `pip install -r requirements.txt` using venv tool.
+    3. Verify installation.
   expected_output: >
-    A JSON file named 'validation_report.json' in the output directory.
-  agent: review_agent
-  context: [coding_task]
-
-infrastructure_task:
-  description: >
-    1. Create a Python virtual environment (venv) in 'output/<job_id>/venv' using the VenvExecutionTool (this tool handles the creation internally).
-    2. Install the dependencies from 'requirements.txt' into this venv using 'pip install -r requirements.txt'.
-    3. Also create a Dockerfile and docker-compose.yml for production deployment context (standard DevOps work).
-  expected_output: >
-    A set up virtual environment, plus Dockerfile and docker-compose.yml.
+    Installation logs.
   agent: devops_agent
   context: [coding_task]
 
-testing_task:
+test_planning_task:
   description: >
-    1. Analyze the code and requirements to write a 'test_main.py' file in 'output/'.
-    2. Execute the tests using the VenvExecutionTool with the command 'python -m pytest test_main.py'.
-    3. Report the test results.
+    READ 'technical_spec.md'.
+    Create 'test_plan.md' with Happy Paths, Edge Cases, and Error States for all methods.
   expected_output: >
-    Test file created and executed. A summary of test results.
-  agent: qa_agent
-  context: [coding_task]
+    A Markdown file 'test_plan.md'.
+  agent: qa_strategist_agent
+  context: [logic_specification_task]
 
-audit_task:
+test_implementation_task:
   description: >
-    Perform a final Technical Audit of the generated project in 'output/'.
-    Verify strict compliance with the Acceptance Criteria Checklist defined in your backstory.
-    - Check Architecture vs Blueprint.
-    - Check Venv Health (dependencies installed?).
-    - Check Test Results (100% pass?).
-    - Check Security (no hardcoded keys).
-    - Check Documentation (README venv instructions).
-
-    You must generate a 'audit_report.json' file in 'output/' with the status (APPROVED/REJECTED), blockers, and recommendations.
+    READ 'test_plan.md'.
+    1. Create 'tests/' directory.
+    2. Write pytest functions for every scenario.
+    3. EXECUTE `pytest` using venv tool.
+    4. Return the FULL OUTPUT of the test execution.
   expected_output: >
-    A JSON file 'audit_report.json' in the output directory.
-  agent: tech_lead_agent
-  context: [blueprint_task, coding_task, infrastructure_task, testing_task]
+    Pytest execution logs and pass/fail status.
+  agent: qa_automation_agent
+  context: [test_planning_task, coding_task]
