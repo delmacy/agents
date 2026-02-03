@@ -142,21 +142,57 @@ async def start_plan(req: PlanRequest):
 
 @app.post("/plan/chat/{job_id}")
 async def chat_pm(job_id: str, req: ChatRequest):
-    # Chat Síncrono com PM
+    """Recebe mensagem do usuário, salva no histórico e roda um debate síncrono entre agentes do planning crew.
+    As respostas dos agentes são salvas e retornadas para o frontend."""
+    state_manager = StateManager()
+
+    # Salva mensagem do usuário
+    state_manager.add_chat_message(job_id, sender="user", role="user", message=req.message)
+
+    # Constrói histórico legível para passar como contexto
+    history_msgs = state_manager.get_chat_history(job_id)
+    history = "\n".join([f"{m['sender']}: {m['message']}" for m in history_msgs])
+
     crew_instance = EmpresaSoftwareCrew(job_id)
-    pm_agent = crew_instance.product_manager_agent()
-    
-    # Simples invocação direta do agente (poderia ser via Task se quisesse persistir tudo)
-    # Nota: Em produção, usar state para manter histórico real
+
+    # Agentes que participam do debate (phase planning)
+    agents = [
+        ("product_manager", crew_instance.product_manager_agent()),
+        ("architect", crew_instance.architect_agent()),
+        ("technical_designer", crew_instance.technical_designer_agent()),
+        ("scrum_master", crew_instance.scrum_master_agent()),
+    ]
+
     from crewai import Task
-    discovery_task = Task(
-        description=f"User says: '{req.message}'. Reply as Product Manager. Context: Conversation history.",
-        expected_output="Response string",
-        agent=pm_agent
-    )
-    
-    response = discovery_task.execute_sync() # Execução leve
-    return {"response": str(response)}
+    responses = []
+
+    for role, agent in agents:
+        task = Task(
+            description=f"Participate in a short debate about the user's message.\nConversation history:\n{history}\nAs {role}, provide a concise contribution to the debate.",
+            expected_output="Response string",
+            agent=agent
+        )
+        try:
+            resp = task.execute_sync()
+            text = str(resp)
+        except Exception as e:
+            text = f"[ERROR generating response: {e}]"
+
+        # Salva resposta do agente no histórico de chat
+        state_manager.add_chat_message(job_id, sender=role, role="agent", message=text)
+        responses.append({"role": role, "message": text})
+
+        # Atualiza histórico para o próximo agente
+        history += f"\n{role}: {text}"
+
+    return {"messages": state_manager.get_chat_history(job_id), "latest": responses}
+
+
+@app.get("/plan/chat/{job_id}")
+async def get_chat(job_id: str):
+    """Retorna o histórico de chat para o frontend exibir."""
+    state_manager = StateManager()
+    return {"messages": state_manager.get_chat_history(job_id)}
 
 @app.post("/plan/approve/{job_id}")
 async def approve_plan(job_id: str):

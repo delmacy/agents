@@ -27,6 +27,19 @@ class StateManager:
                     details TEXT
                 )
             ''')
+
+            # Tabela de Mensagens de Chat (histórico para frontend)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL,
+                    sender TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    timestamp TEXT NOT NULL
+                )
+            ''')
+
             conn.commit()
             conn.close()
 
@@ -57,6 +70,39 @@ class StateManager:
             
             conn.commit()
             conn.close()
+
+    def add_chat_message(self, job_id: str, sender: str, role: str, message: str):
+        """Adiciona uma mensagem de chat ao histórico para que o frontend possa recuperar e exibir."""
+        with db_lock:
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            cursor.execute('''
+                INSERT INTO chat_messages (job_id, sender, role, message, timestamp)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (job_id, sender, role, message, timestamp))
+
+            conn.commit()
+            conn.close()
+
+    def get_chat_history(self, job_id: str) -> List[Dict[str, Any]]:
+        """Retorna o histórico de chat ordenado do mais antigo para o mais recente."""
+        with db_lock:
+            conn = sqlite3.connect(DB_FILE)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                SELECT * FROM chat_messages
+                WHERE job_id = ?
+                ORDER BY id ASC
+            ''', (job_id,))
+
+            rows = cursor.fetchall()
+            conn.close()
+
+            return [dict(row) for row in rows]
 
     def get_job_status(self, job_id: str) -> List[Dict[str, Any]]:
         """Recupera todos os logs de um job específico, ordenados do mais recente para o mais antigo."""

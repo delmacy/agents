@@ -23,16 +23,42 @@ class EmpresaSoftwareCrew:
         self.venv_tool = VenvExecutionTool(job_id=self.job_id)
 
     def step_callback(self, agent_output, **kwargs):
-        """Callback to log every thought/step of the agents."""
+        """Callback to log every thought/step of the agents.
+        Agora também persiste o pensamento no histórico de chat para que o frontend consiga exibir debates em tempo real."""
         try:
             step_details = str(agent_output)
             clean_details = step_details[:800] + "..." if len(step_details) > 800 else step_details
+
+            # Log tradicional
             self.state_manager.log_task(
                 job_id=self.job_id,
                 task_name="Agent Thinking...", 
                 status="EXECUTING",
                 details=clean_details
             )
+
+            # Tenta inferir o nome do agente dos kwargs para gravar no chat
+            agent_name = kwargs.get('agent_name')
+            agent_obj = kwargs.get('agent')
+            if not agent_name and agent_obj:
+                try:
+                    if hasattr(agent_obj, 'config') and isinstance(agent_obj.config, dict):
+                        agent_name = agent_obj.config.get('name') or str(agent_obj)
+                    else:
+                        agent_name = str(agent_obj)
+                except Exception:
+                    agent_name = str(agent_obj)
+
+            if not agent_name:
+                agent_name = "agent"
+
+            # Salva no histórico de chat para o frontend
+            try:
+                self.state_manager.add_chat_message(self.job_id, sender=agent_name, role="agent", message=clean_details)
+            except Exception:
+                # Evita que falhas aqui quebrem o fluxo principal
+                pass
+
         except Exception:
             pass
 
